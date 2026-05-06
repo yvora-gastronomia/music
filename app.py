@@ -1,55 +1,33 @@
 import os
 import json
-import html
 import time
+import re
+import html
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
-
-APP_TITLE = "YVORA Music"
+APP_TITLE = "Yvora Music"
 BRAND_BG = "#EFE7DD"
 BRAND_BLUE = "#0E2A47"
 
-USERS_HEADERS = ["username", "password", "role", "active"]
 
-SESS_HEADERS = [
-    "session_id",
-    "title",
-    "genre",
-    "total_duration_min",
-    "status",
-    "updated_at_utc",
-]
-
-CH_HEADERS = [
-    "session_id",
-    "chapter_index",
-    "moment_key",
-    "chapter_type",
-    "planned_duration_sec",
-    "prato",
-    "musica",
-    "artista",
-    "texto_card_prato",
-    "texto_card_musica",
-    "texto_card_harmonizacao",
-    "texto_destaque",
-    "vinho",
-    "texto_vinho",
-]
-
-LIVE_HEADERS = [
-    "session_id",
-    "current_chapter_index",
-    "updated_at_utc",
-]
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def fmt_mmss(total_seconds: Any) -> str:
+    try:
+        total_seconds = int(float(total_seconds or 0))
+    except Exception:
+        total_seconds = 0
+    total_seconds = max(total_seconds, 0)
+    m = total_seconds // 60
+    s = total_seconds % 60
+    return f"{m:02d}:{s:02d}"
 
 
 def safe_text(value: Any) -> str:
@@ -61,32 +39,20 @@ def safe_text(value: Any) -> str:
     return value.strip()
 
 
-def escape(value: Any) -> str:
-    return html.escape(safe_text(value))
-
-
-def fmt_mmss(total_seconds: Any) -> str:
-    try:
-        total_seconds = int(float(total_seconds or 0))
-    except Exception:
-        total_seconds = 0
-
-    total_seconds = max(total_seconds, 0)
-    minutes = total_seconds // 60
-    seconds = total_seconds % 60
-
-    return f"{minutes:02d}:{seconds:02d}"
+def pick_first(row: Dict[str, Any], cols: List[str], default: str = "") -> str:
+    for col in cols:
+        value = safe_text(row.get(col, ""))
+        if value:
+            return value
+    return default
 
 
 def app_bootstrap() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
-
     st.markdown(
         f"""
         <style>
-          html, body, [class*="css"] {{
-            background: {BRAND_BG} !important;
-          }}
+          html, body, [class*="css"] {{ background: {BRAND_BG} !important; }}
 
           .yv-title {{
             color: {BRAND_BLUE};
@@ -103,13 +69,26 @@ def app_bootstrap() -> None:
 
           .meta {{
             color: rgba(14,42,71,0.70);
-            font-size: 13px;
+            font-size: 12px;
+          }}
+
+          .mobile-wrap {{
+            max-width: 1180px;
+            margin: 0 auto;
+          }}
+
+          .show-card {{
+            background: rgba(255,255,255,0.55);
+            border: 1px solid rgba(14,42,71,0.14);
+            border-radius: 18px;
+            padding: 18px 20px;
+            margin-bottom: 14px;
           }}
 
           .hero-card {{
             background: {BRAND_BLUE};
-            border-radius: 0 0 36px 36px;
-            padding: 36px 52px 44px 52px;
+            border-radius: 0 0 34px 34px;
+            padding: 34px 52px 42px 52px;
             margin-bottom: 28px;
             color: #F7F0E8;
             box-shadow: 0 18px 50px rgba(14,42,71,0.16);
@@ -120,7 +99,7 @@ def app_bootstrap() -> None:
             font-size: 13px;
             letter-spacing: 0.12em;
             text-transform: uppercase;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
           }}
 
           .hero-title {{
@@ -137,34 +116,31 @@ def app_bootstrap() -> None:
             line-height: 1.45;
           }}
 
-          .hero-text {{
-            margin-top: 24px;
+          .show-h1 {{
             font-family: Georgia, "Times New Roman", serif;
-            font-size: 27px;
-            line-height: 1.48;
-            color: rgba(247,240,232,0.94);
+            color: {BRAND_BLUE};
+            font-size: 22px;
+            margin: 0 0 6px 0;
           }}
 
-          .grid-3 {{
+          .show-muted {{
+            color: rgba(14,42,71,0.70);
+            font-size: 13px;
+          }}
+
+          .info-grid {{
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 18px;
             margin-top: 8px;
           }}
 
-          .grid-2 {{
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 18px;
-            margin-top: 8px;
-          }}
-
           .info-card {{
-            background: rgba(255,255,255,0.72);
+            background: rgba(255,255,255,0.70);
             border: 1px solid rgba(14,42,71,0.10);
             border-radius: 22px;
             padding: 22px 24px;
-            min-height: 210px;
+            min-height: 230px;
             box-shadow: 0 12px 34px rgba(14,42,71,0.07);
           }}
 
@@ -183,48 +159,12 @@ def app_bootstrap() -> None:
             margin: 0;
           }}
 
-          .small-card {{
-            background: rgba(255,255,255,0.65);
-            border: 1px solid rgba(14,42,71,0.14);
-            border-radius: 16px;
-            padding: 16px 18px;
-            margin-bottom: 12px;
-          }}
-
-          .small-title {{
-            font-family: Georgia, "Times New Roman", serif;
-            color: {BRAND_BLUE};
-            font-size: 22px;
-            margin: 0 0 6px 0;
-          }}
-
-          .small-muted {{
-            color: rgba(14,42,71,0.72);
-            font-size: 14px;
-            line-height: 1.55;
-          }}
-
-          .pill {{
-            display:inline-block;
-            padding:4px 10px;
-            border-radius:999px;
-            background: rgba(14,42,71,0.08);
-            color: {BRAND_BLUE};
-            font-size:12px;
-            margin-right:6px;
-            margin-bottom:6px;
-          }}
-
-          .ops-current {{
-            background: rgba(14,42,71,0.08);
-            border: 1px solid rgba(14,42,71,0.18);
-            border-radius: 18px;
-            padding: 18px 20px;
-            margin-bottom: 12px;
-          }}
-
           .stButton > button {{
+            padding: 0.20rem 0.60rem !important;
+            min-height: 2.0rem !important;
             border-radius: 999px !important;
+            font-size: 13px !important;
+            white-space: nowrap !important;
           }}
 
           .yv-badge {{
@@ -238,8 +178,12 @@ def app_bootstrap() -> None:
           }}
 
           @media (max-width: 900px) {{
+            .mobile-wrap {{
+              max-width: 560px;
+            }}
+
             .hero-card {{
-              padding: 28px 24px 34px 24px;
+              padding: 26px 24px 34px 24px;
               border-radius: 0 0 28px 28px;
             }}
 
@@ -251,11 +195,7 @@ def app_bootstrap() -> None:
               font-size: 16px;
             }}
 
-            .hero-text {{
-              font-size: 22px;
-            }}
-
-            .grid-3, .grid-2 {{
+            .info-grid {{
               grid-template-columns: 1fr;
               gap: 12px;
             }}
@@ -284,8 +224,8 @@ def render_header(subtitle: str) -> None:
             st.image(logo_path, width=90)
 
     with col2:
-        st.markdown(f'<h2 class="yv-title">{escape(APP_TITLE)}</h2>', unsafe_allow_html=True)
-        st.markdown(f'<div class="meta">{escape(subtitle)}</div>', unsafe_allow_html=True)
+        st.markdown(f'<h2 class="yv-title">{APP_TITLE}</h2>', unsafe_allow_html=True)
+        st.markdown(f'<div class="meta">{html.escape(subtitle)}</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
@@ -304,17 +244,21 @@ def get_sheet():
     google_block = st.secrets.get("google", {})
 
     if google_block.get("service_account_json"):
-        sa_info = json.loads(google_block["service_account_json"])
+        try:
+            sa_info = json.loads(google_block["service_account_json"])
+        except Exception as e:
+            raise RuntimeError(f"google.service_account_json inválido: {e}")
     elif "gcp_service_account" in st.secrets:
-        sa_info = dict(st.secrets["gcp_service_account"])
+        try:
+            sa_info = dict(st.secrets["gcp_service_account"])
+        except Exception as e:
+            raise RuntimeError(f"[gcp_service_account] inválido: {e}")
     else:
         raise RuntimeError("Use [google].service_account_json ou [gcp_service_account] nos Secrets.")
 
     private_key = sa_info.get("private_key", "")
-
     if not private_key:
         raise RuntimeError("private_key ausente nas credenciais.")
-
     if "\\n" in private_key and "\n" not in private_key:
         sa_info["private_key"] = private_key.replace("\\n", "\n")
 
@@ -322,206 +266,139 @@ def get_sheet():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-
     creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
     gc = gspread.authorize(creds)
-
     return gc.open_by_key(sheet_id)
 
 
 def ws_get_or_create(title: str, headers: List[str]):
     sh = get_sheet()
-
     try:
         ws = sh.worksheet(title)
         row1 = ws.row_values(1)
-
         if headers and not row1:
             ws.append_row(headers)
-
         return ws
-
     except Exception:
-        ws = sh.add_worksheet(title=title, rows=1000, cols=max(12, len(headers) or 12))
-
+        ws = sh.add_worksheet(title=title, rows=5000, cols=max(12, len(headers) or 12))
         if headers:
             ws.append_row(headers)
-
         return ws
 
 
-def ws_read_df(title: str, headers: List[str]) -> pd.DataFrame:
-    ws = ws_get_or_create(title, headers)
+def ws_read_df(title: str) -> pd.DataFrame:
+    ws = ws_get_or_create(title, [])
     values = ws.get_all_values()
-
     if not values or not values[0]:
-        return pd.DataFrame(columns=headers)
-
-    current_headers = values[0]
+        return pd.DataFrame()
+    header = values[0]
     rows = values[1:]
+    return pd.DataFrame(rows, columns=header)
 
-    return pd.DataFrame(rows, columns=current_headers)
 
-
-def ws_replace_all(title: str, headers: List[str], df: pd.DataFrame) -> None:
+def ws_append_row(title: str, headers: List[str], row: List[Any]) -> None:
     ws = ws_get_or_create(title, headers)
+    ws.append_row([("" if v is None else str(v)) for v in row])
 
-    output = [headers]
 
-    for _, row in df.iterrows():
-        output.append([safe_text(row.get(h, "")) for h in headers])
+def ws_replace_session_rows(title: str, headers: List[str], session_id: str, new_rows: List[List[Any]]) -> None:
+    ws = ws_get_or_create(title, headers)
+    allv = ws.get_all_values()
+
+    if not allv:
+        ws.append_row(headers)
+        allv = [headers]
+
+    header = allv[0]
+
+    for h in headers:
+        if h not in header:
+            header.append(h)
+
+    kept = [header]
+
+    idx_key = header.index("session_id")
+
+    for r in allv[1:]:
+        if not r:
+            continue
+        r = r + [""] * (len(header) - len(r))
+        if r[idx_key] != session_id:
+            kept.append(r)
 
     ws.clear()
-    ws.update("A1", output)
+    ws.append_rows(kept)
+
+    if new_rows:
+        ws.append_rows([["" if v is None else str(v) for v in row] for row in new_rows])
 
 
-def normalize_chapters_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame(columns=CH_HEADERS)
+USERS_HEADERS = ["username", "password", "role", "active"]
 
-    for col in CH_HEADERS:
-        if col not in df.columns:
-            df[col] = ""
+SESS_HEADERS = [
+    "session_id",
+    "title",
+    "genre",
+    "total_duration_min",
+    "status",
+    "updated_at_utc",
+]
 
-    df = df[CH_HEADERS].copy()
+CH_HEADERS = [
+    "session_id",
+    "chapter_index",
+    "moment_key",
+    "chapter_type",
+    "planned_duration_sec",
+    "prato",
+    "musica",
+    "artista",
+    "texto_card_prato",
+    "texto_card_musica",
+    "texto_card_harmonizacao",
+    "texto_destaque",
+    "music_title",
+    "music_artist",
+    "link_context_input",
+    "ai_story_text",
+    "ai_music_alternatives",
+    "ai_experience_actions",
+    "ai_notes",
+    "updated_at_utc",
+]
 
-    df["chapter_index"] = pd.to_numeric(df["chapter_index"], errors="coerce").fillna(0).astype(int)
-    df["planned_duration_sec"] = pd.to_numeric(df["planned_duration_sec"], errors="coerce").fillna(240).astype(int)
+LIVE_HEADERS = ["session_id", "current_chapter_index", "updated_at_utc"]
 
-    return df.sort_values("chapter_index").reset_index(drop=True)
-
-
-def list_sessions_sheet() -> pd.DataFrame:
-    df = ws_read_df("sessions", SESS_HEADERS)
-
-    if df.empty:
-        return df
-
-    for col in SESS_HEADERS:
-        if col not in df.columns:
-            df[col] = ""
-
-    return df[SESS_HEADERS].copy()
-
-
-def get_session_row(session_id: str) -> Optional[Dict[str, Any]]:
-    df = list_sessions_sheet()
-
-    if df.empty:
-        return None
-
-    df["session_id"] = df["session_id"].astype(str)
-    match = df[df["session_id"] == session_id]
-
-    if match.empty:
-        return None
-
-    return match.iloc[0].to_dict()
-
-
-def read_chapters(session_id: str) -> pd.DataFrame:
-    df = ws_read_df("chapters", CH_HEADERS)
-    df = normalize_chapters_df(df)
-
-    if df.empty:
-        return df
-
-    df["session_id"] = df["session_id"].astype(str)
-    df = df[df["session_id"] == session_id].copy()
-
-    return df.sort_values("chapter_index").reset_index(drop=True)
-
-
-def get_live_index(session_id: str) -> int:
-    df = ws_read_df("live", LIVE_HEADERS)
-
-    if df.empty or "session_id" not in df.columns:
-        return 1
-
-    df["session_id"] = df["session_id"].astype(str)
-    match = df[df["session_id"] == session_id]
-
-    if match.empty:
-        return 1
-
-    try:
-        return int(float(match.iloc[0]["current_chapter_index"]))
-    except Exception:
-        return 1
-
-
-def set_live_index(session_id: str, idx: int) -> None:
-    df = ws_read_df("live", LIVE_HEADERS)
-
-    if df.empty:
-        df = pd.DataFrame(columns=LIVE_HEADERS)
-
-    for col in LIVE_HEADERS:
-        if col not in df.columns:
-            df[col] = ""
-
-    df = df[LIVE_HEADERS].copy()
-    df["session_id"] = df["session_id"].astype(str)
-
-    now = utc_now()
-
-    if session_id in df["session_id"].tolist():
-        df.loc[df["session_id"] == session_id, "current_chapter_index"] = str(int(idx))
-        df.loc[df["session_id"] == session_id, "updated_at_utc"] = now
-    else:
-        df.loc[len(df)] = [session_id, str(int(idx)), now]
-
-    ws_replace_all("live", LIVE_HEADERS, df)
-
-
-def upsert_session_status(session_id: str, status: str) -> None:
-    df = list_sessions_sheet()
-
-    if df.empty:
-        df = pd.DataFrame(columns=SESS_HEADERS)
-
-    for col in SESS_HEADERS:
-        if col not in df.columns:
-            df[col] = ""
-
-    df = df[SESS_HEADERS].copy()
-    df["session_id"] = df["session_id"].astype(str)
-
-    valid_status = status if status in ["draft", "scheduled", "live", "finished", "cancelled"] else "live"
-
-    if session_id in df["session_id"].tolist():
-        df.loc[df["session_id"] == session_id, "status"] = valid_status
-        df.loc[df["session_id"] == session_id, "updated_at_utc"] = utc_now()
-    else:
-        df.loc[len(df)] = [
-            session_id,
-            "YVORA Bossa Nova Experience",
-            "Bossa Nova",
-            "60",
-            valid_status,
-            utc_now(),
-        ]
-
-    ws_replace_all("sessions", SESS_HEADERS, df)
+HIST_HEADERS = [
+    "ts_utc",
+    "session_id",
+    "chapter_index",
+    "moment_key",
+    "music_title",
+    "music_artist",
+    "link_context_input",
+    "ai_story_text",
+    "ai_music_alternatives",
+    "ai_experience_actions",
+    "ai_notes",
+]
 
 
 def auth_login(username: str, password: str) -> Optional[Dict[str, str]]:
-    df = ws_read_df("users", USERS_HEADERS)
-
+    df = ws_read_df("users")
     if df.empty:
         return None
 
     u = safe_text(username)
     p = safe_text(password)
 
-    for _, row in df.iterrows():
-        active = safe_text(row.get("active", "1")).lower()
-
-        if active in ["0", "false", "não", "nao", "inativo"]:
+    for _, r in df.iterrows():
+        active = safe_text(r.get("active", "1"))
+        if active in ["0", "False", "false", "não", "nao"]:
             continue
 
-        if safe_text(row.get("username", "")) == u and safe_text(row.get("password", "")) == p:
-            role = safe_text(row.get("role", "staff")) or "staff"
+        if safe_text(r.get("username", "")) == u and safe_text(r.get("password", "")) == p:
+            role = safe_text(r.get("role", "staff")) or "staff"
             return {"username": u, "role": role}
 
     return None
@@ -532,429 +409,677 @@ def logout() -> None:
     st.rerun()
 
 
-def get_default_sid() -> str:
-    qp_sid = safe_text(st.query_params.get("sid", ""))
+def list_sessions_sheet() -> pd.DataFrame:
+    df = ws_read_df("sessions")
+    if df.empty:
+        return df
 
-    if qp_sid:
-        return qp_sid
+    if "updated_at_utc" in df.columns:
+        df = df.sort_values("updated_at_utc", ascending=False)
 
-    sessions = list_sessions_sheet()
-
-    if not sessions.empty and "session_id" in sessions.columns:
-        return safe_text(sessions.iloc[0]["session_id"])
-
-    return "bossa-nova-yvora"
+    return df
 
 
-def get_current_chapter(session_id: str) -> tuple[pd.DataFrame, int, Dict[str, Any]]:
-    chapters = read_chapters(session_id)
+def get_session_row(session_id: str) -> Optional[Dict[str, Any]]:
+    df = list_sessions_sheet()
+    if df.empty or "session_id" not in df.columns:
+        return None
 
-    if chapters.empty:
-        return chapters, 1, {}
+    m = df[df["session_id"] == session_id]
+    if m.empty:
+        return None
 
-    cur_idx = get_live_index(session_id)
-    current = chapters[chapters["chapter_index"] == cur_idx]
-
-    if current.empty:
-        current = chapters.iloc[[0]]
-        cur_idx = int(current.iloc[0]["chapter_index"])
-
-    return chapters, cur_idx, current.iloc[0].to_dict()
+    return m.iloc[0].to_dict()
 
 
-def render_live_controls(session_id: str, chapters: pd.DataFrame, cur_idx: int) -> None:
-    if chapters.empty:
-        return
+def upsert_session(session_id: str, title: str, genre: str, total_min: int, status: str) -> None:
+    ws = ws_get_or_create("sessions", SESS_HEADERS)
+    values = ws.get_all_values()
 
-    indexes = chapters["chapter_index"].tolist()
+    if not values:
+        ws.append_row(SESS_HEADERS)
+        values = [SESS_HEADERS]
 
-    c1, c2, c3, c4, c5 = st.columns([1.1, 1, 1, 1, 2])
+    header = values[0]
 
-    with c1:
-        if st.button("Iniciar evento", use_container_width=True):
-            set_live_index(session_id, min(indexes))
-            upsert_session_status(session_id, "live")
-            st.rerun()
+    for h in SESS_HEADERS:
+        if h not in header:
+            header.append(h)
 
-    with c2:
-        if st.button("◀ Anterior", use_container_width=True):
-            previous_indexes = [i for i in indexes if i < cur_idx]
-            new_idx = max(previous_indexes) if previous_indexes else min(indexes)
-            set_live_index(session_id, new_idx)
-            st.rerun()
+    idx_key = header.index("session_id")
+    found = None
 
-    with c3:
-        if st.button("Próximo ▶", use_container_width=True):
-            next_indexes = [i for i in indexes if i > cur_idx]
-            new_idx = min(next_indexes) if next_indexes else max(indexes)
-            set_live_index(session_id, new_idx)
-            st.rerun()
+    for i, r in enumerate(values[1:], start=2):
+        if len(r) > idx_key and r[idx_key] == session_id:
+            found = i
+            break
 
-    with c4:
-        if st.button("Voltar início", use_container_width=True):
-            set_live_index(session_id, min(indexes))
-            st.rerun()
+    row = {
+        "session_id": session_id,
+        "title": title,
+        "genre": genre,
+        "total_duration_min": str(int(total_min)),
+        "status": status,
+        "updated_at_utc": utc_now().isoformat(),
+    }
 
-    with c5:
-        chosen = st.selectbox(
-            "Ir para capítulo",
-            indexes,
-            index=indexes.index(cur_idx) if cur_idx in indexes else 0,
-            key="jump_chapter",
-        )
+    out = [row.get(h, "") for h in header]
 
-        if chosen != cur_idx:
-            set_live_index(session_id, int(chosen))
-            st.rerun()
+    if found:
+        ws.update(f"A{found}", [out])
+    else:
+        ws.append_row(out)
 
 
-def render_chapter_narratives(row: Dict[str, Any]) -> None:
-    st.markdown(
-        f"""
-        <div class="grid-3">
-          <div class="info-card">
-            <h3>Prato</h3>
-            <p>{escape(row.get("texto_card_prato", ""))}</p>
-          </div>
+def read_chapters(session_id: str) -> pd.DataFrame:
+    df = ws_read_df("chapters")
 
-          <div class="info-card">
-            <h3>Música</h3>
-            <p>{escape(row.get("texto_card_musica", ""))}</p>
-          </div>
+    if df.empty or "session_id" not in df.columns:
+        return pd.DataFrame()
 
-          <div class="info-card">
-            <h3>Harmonização</h3>
-            <p>{escape(row.get("texto_card_harmonizacao", ""))}</p>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    df = df[df["session_id"] == session_id].copy()
+
+    if df.empty:
+        return df
+
+    if "chapter_index" not in df.columns:
+        df["chapter_index"] = range(len(df))
+
+    if "planned_duration_sec" not in df.columns:
+        df["planned_duration_sec"] = 300
+
+    df["chapter_index"] = pd.to_numeric(df["chapter_index"], errors="coerce").fillna(0).astype(int)
+
+    return df.sort_values("chapter_index").reset_index(drop=True)
+
+
+def save_chapters(session_id: str, df: pd.DataFrame) -> None:
+    rows = []
+
+    for _, r in df.iterrows():
+        row = {
+            "session_id": session_id,
+            "chapter_index": int(pd.to_numeric(r.get("chapter_index", 0), errors="coerce") or 0),
+            "moment_key": r.get("moment_key", "aquecimento"),
+            "chapter_type": r.get("chapter_type", "music"),
+            "planned_duration_sec": int(pd.to_numeric(r.get("planned_duration_sec", 300), errors="coerce") or 300),
+            "prato": r.get("prato", ""),
+            "musica": r.get("musica", r.get("music_title", "")),
+            "artista": r.get("artista", r.get("music_artist", "")),
+            "texto_card_prato": r.get("texto_card_prato", r.get("historia_prato", "")),
+            "texto_card_musica": r.get("texto_card_musica", r.get("historia_musica", "")),
+            "texto_card_harmonizacao": r.get("texto_card_harmonizacao", r.get("conexao_experiencia", "")),
+            "texto_destaque": r.get("texto_destaque", r.get("ai_story_text", "")),
+            "music_title": r.get("music_title", r.get("musica", "")),
+            "music_artist": r.get("music_artist", r.get("artista", "")),
+            "link_context_input": r.get("link_context_input", ""),
+            "ai_story_text": r.get("ai_story_text", ""),
+            "ai_music_alternatives": r.get("ai_music_alternatives", ""),
+            "ai_experience_actions": r.get("ai_experience_actions", ""),
+            "ai_notes": r.get("ai_notes", ""),
+            "updated_at_utc": utc_now().isoformat(),
+        }
+
+        rows.append([row.get(h, "") for h in CH_HEADERS])
+
+    ws_replace_session_rows("chapters", CH_HEADERS, session_id, rows)
+
+
+def get_live_index(session_id: str) -> int:
+    df = ws_read_df("live")
+
+    if df.empty or "session_id" not in df.columns:
+        return 0
+
+    m = df[df["session_id"] == session_id]
+
+    if m.empty:
+        return 0
+
+    try:
+        return int(m.iloc[0]["current_chapter_index"])
+    except Exception:
+        return 0
+
+
+def set_live_index(session_id: str, idx: int) -> None:
+    ws = ws_get_or_create("live", LIVE_HEADERS)
+    values = ws.get_all_values()
+
+    if not values:
+        ws.append_row(LIVE_HEADERS)
+        values = [LIVE_HEADERS]
+
+    header = values[0]
+    idx_key = header.index("session_id")
+    found = None
+
+    for i, r in enumerate(values[1:], start=2):
+        if len(r) > idx_key and r[idx_key] == session_id:
+            found = i
+            break
+
+    row = {
+        "session_id": session_id,
+        "current_chapter_index": str(int(idx)),
+        "updated_at_utc": utc_now().isoformat(),
+    }
+
+    out = [row.get(h, "") for h in header]
+
+    if found:
+        ws.update(f"A{found}", [out])
+    else:
+        ws.append_row(out)
+
+
+def gemini_available() -> bool:
+    return bool(st.secrets.get("gemini", {}).get("api_key", ""))
+
+
+def gemini_generate(payload: Dict[str, str]) -> Dict[str, str]:
+    if not gemini_available():
+        return {
+            "story_text": "Defina gemini.api_key nos Secrets do Streamlit Cloud.",
+            "music_alternatives": "",
+            "experience_actions": "",
+            "notes": "",
+        }
+
+    import google.generativeai as genai
+
+    genai.configure(api_key=st.secrets["gemini"]["api_key"])
+    model = genai.GenerativeModel("gemini-1.5-pro")
+
+    prompt = f"""
+Você é curador de experiências gastronômicas com música ao vivo.
+
+Gênero: {payload.get("genre","")}
+Momento: {payload.get("moment_key","")}
+
+Música:
+Título: {payload.get("music_title","")}
+Artista: {payload.get("music_artist","")}
+
+Prato:
+{payload.get("prato","")}
+
+Contexto do diretor:
+{payload.get("link_context_input","")}
+
+Entregue exatamente nestas 4 seções:
+
+1) STORY_TEXT
+4 a 6 linhas conectando momento, música e a casa.
+
+2) MUSIC_ALTERNATIVES
+3 a 6 sugestões no formato:
+"Título" | Artista | por que funciona (máx 10 palavras)
+
+3) EXPERIENCE_ACTIONS
+4 a 8 bullets práticos (serviço e dinâmica)
+
+4) NOTES
+Notas extras.
+""".strip()
+
+    res = model.generate_content(prompt)
+    text = res.text or ""
+
+    def extract(section: str) -> str:
+        m = re.search(rf"{section}\s*(.*?)(?=\n\s*\d\)|\Z)", text, flags=re.S | re.I)
+        return (m.group(1).strip() if m else "").strip()
+
+    return {
+        "story_text": extract("STORY_TEXT"),
+        "music_alternatives": extract("MUSIC_ALTERNATIVES"),
+        "experience_actions": extract("EXPERIENCE_ACTIONS"),
+        "notes": extract("NOTES"),
+    }
+
+
+def append_gemini_history(row: Dict[str, Any]) -> None:
+    ws_append_row(
+        "gemini_history",
+        HIST_HEADERS,
+        [
+            utc_now().isoformat(),
+            row.get("session_id", ""),
+            row.get("chapter_index", ""),
+            row.get("moment_key", ""),
+            row.get("music_title", ""),
+            row.get("music_artist", ""),
+            row.get("link_context_input", ""),
+            row.get("ai_story_text", ""),
+            row.get("ai_music_alternatives", ""),
+            row.get("ai_experience_actions", ""),
+            row.get("ai_notes", ""),
+        ],
     )
-
-    vinho = escape(row.get("vinho", ""))
-    texto_vinho = escape(row.get("texto_vinho", ""))
-
-    if vinho or texto_vinho:
-        st.markdown(
-            f"""
-            <div class="small-card" style="margin-top:18px;">
-              <div class="small-title">Vinho sugerido</div>
-              <div style="font-weight:700; color:{BRAND_BLUE}; margin-bottom:6px;">{vinho}</div>
-              <div class="small-muted">{texto_vinho}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
 
 def render_client_view(session_id: str, show_controls: bool = False) -> None:
-    session = get_session_row(session_id)
+    sess = get_session_row(session_id)
 
-    if not session:
-        st.error("Sessão não encontrada na aba sessions.")
+    if not sess:
+        st.error("Sessão não encontrada na planilha.")
         return
 
-    chapters, cur_idx, row = get_current_chapter(session_id)
+    ch = read_chapters(session_id)
 
-    if chapters.empty or not row:
-        st.warning("Sessão sem capítulos na aba chapters.")
+    if ch.empty:
+        st.warning("Sessão sem capítulos na planilha.")
         return
+
+    cur_idx = get_live_index(session_id)
+    cur = ch[ch["chapter_index"] == cur_idx]
+
+    if cur.empty:
+        cur = ch.iloc[[0]]
+        cur_idx = int(cur.iloc[0]["chapter_index"])
+
+    row = cur.iloc[0].to_dict()
 
     if show_controls:
-        render_live_controls(session_id, chapters, cur_idx)
+        c1, c2, c3 = st.columns([1, 1, 3])
 
-    subtitle_parts = [
-        escape(row.get("artista", "")),
-        escape(row.get("prato", "")),
-        escape(row.get("moment_key", "")),
-    ]
-    subtitle = " · ".join([p for p in subtitle_parts if p])
+        with c1:
+            if st.button("◀ Anterior", use_container_width=True):
+                set_live_index(session_id, max(cur_idx - 1, 0))
+                st.rerun()
+
+        with c2:
+            if st.button("Próximo ▶", use_container_width=True):
+                max_idx = int(ch["chapter_index"].max())
+                set_live_index(session_id, min(cur_idx + 1, max_idx))
+                st.rerun()
+
+        with c3:
+            st.caption(f"Capítulo ao vivo: {cur_idx}")
+
+    musica = pick_first(row, ["musica", "music_title"], "Ao vivo")
+    artista = pick_first(row, ["artista", "music_artist"], "")
+    prato = pick_first(row, ["prato"], "")
+
+    texto_prato = pick_first(row, ["texto_card_prato", "historia_prato"], "")
+    texto_musica = pick_first(row, ["texto_card_musica", "historia_musica"], "")
+    texto_harmonizacao = pick_first(row, ["texto_card_harmonizacao", "conexao_experiencia"], "")
+    texto_destaque = pick_first(
+        row,
+        ["texto_destaque", "conexao_experiencia", "ai_story_text"],
+        "A conexão desta etapa aparece aqui.",
+    )
+
+    momento = pick_first(row, ["moment_key"], "")
+
+    musica_html = html.escape(musica)
+    artista_html = html.escape(artista)
+    prato_html = html.escape(prato)
+    momento_html = html.escape(momento)
+
+    texto_prato_html = html.escape(texto_prato)
+    texto_musica_html = html.escape(texto_musica)
+    texto_harmonizacao_html = html.escape(texto_harmonizacao)
+    texto_destaque_html = html.escape(texto_destaque)
+
+    st.markdown('<div class="mobile-wrap">', unsafe_allow_html=True)
 
     st.markdown(
         f"""
         <div class="hero-card">
           <div class="hero-label">Agora tocando</div>
-          <h1 class="hero-title">{escape(row.get("musica", ""))}</h1>
-          <div class="hero-subtitle">{subtitle}</div>
-          <div class="hero-text">{escape(row.get("texto_destaque", ""))}</div>
+          <h1 class="hero-title">{musica_html}</h1>
+          <div class="hero-subtitle">
+            {artista_html}
+            {f' · {prato_html}' if prato_html else ''}
+            {f' · {momento_html}' if momento_html else ''}
+          </div>
+          <div style="margin-top:24px; font-family: Georgia, 'Times New Roman', serif; font-size:28px; line-height:1.48;">
+            {texto_destaque_html}
+          </div>
+        </div>
+
+        <div class="info-grid">
+          <div class="info-card">
+            <h3>Prato</h3>
+            <p>{texto_prato_html}</p>
+          </div>
+
+          <div class="info-card">
+            <h3>Música</h3>
+            <p>{texto_musica_html}</p>
+          </div>
+
+          <div class="info-card">
+            <h3>Harmonização</h3>
+            <p>{texto_harmonizacao_html}</p>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    render_chapter_narratives(row)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
-def safe_setlist_df(chapters: pd.DataFrame) -> pd.DataFrame:
-    if chapters.empty:
-        return chapters
+def safe_setlist_df(ch: pd.DataFrame) -> pd.DataFrame:
+    if ch.empty:
+        return ch
 
-    show = chapters.copy()
+    show = ch.copy()
+
+    if "planned_duration_sec" not in show.columns:
+        show["planned_duration_sec"] = 0
 
     show["planned_duration_sec"] = pd.to_numeric(show["planned_duration_sec"], errors="coerce").fillna(0).astype(int)
-    show["duracao"] = show["planned_duration_sec"].apply(fmt_mmss)
 
     keep = [
-        "chapter_index",
-        "moment_key",
-        "chapter_type",
-        "duracao",
-        "prato",
-        "musica",
-        "artista",
-        "vinho",
+        c
+        for c in [
+            "chapter_index",
+            "moment_key",
+            "chapter_type",
+            "planned_duration_sec",
+            "prato",
+            "musica",
+            "artista",
+            "music_title",
+            "music_artist",
+        ]
+        if c in show.columns
     ]
 
-    return show[[c for c in keep if c in show.columns]].copy()
+    show = show[keep].copy()
+    show["planned_duration_sec"] = show["planned_duration_sec"].apply(fmt_mmss)
+
+    if "musica" not in show.columns and "music_title" in show.columns:
+        show["musica"] = show["music_title"]
+
+    if "artista" not in show.columns and "music_artist" in show.columns:
+        show["artista"] = show["music_artist"]
+
+    show = show.drop(columns=[c for c in ["music_title", "music_artist"] if c in show.columns])
+
+    return show.rename(columns={"planned_duration_sec": "duração"})
 
 
-def page_band_view(session_id: str) -> None:
-    render_header("Banda")
-
-    chapters, cur_idx, row = get_current_chapter(session_id)
-
-    if chapters.empty or not row:
-        st.warning("Sem capítulos para esta sessão.")
-        return
-
-    st.markdown("### Agora")
-    st.markdown(
-        f"""
-        <div class="ops-current">
-          <span class="pill">Capítulo {escape(cur_idx)}</span>
-          <span class="pill">{escape(row.get("moment_key", ""))}</span>
-          <div class="small-title">{escape(row.get("musica", ""))}</div>
-          <div class="small-muted">{escape(row.get("artista", ""))}</div>
-          <div style="margin-top:8px;"><b>Prato:</b> {escape(row.get("prato", ""))}</div>
-          <div style="margin-top:8px; line-height:1.5;">{escape(row.get("texto_card_musica", ""))}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("### Roteiro completo")
-    st.dataframe(safe_setlist_df(chapters), use_container_width=True, hide_index=True)
-
-
-def page_kitchen_view(session_id: str) -> None:
-    render_header("Cozinha")
-
-    chapters, cur_idx, row = get_current_chapter(session_id)
-
-    if chapters.empty or not row:
-        st.warning("Sem capítulos para esta sessão.")
-        return
-
-    st.markdown("### Agora no salão")
-    st.markdown(
-        f"""
-        <div class="ops-current">
-          <span class="pill">Capítulo {escape(cur_idx)}</span>
-          <span class="pill">{escape(row.get("chapter_type", ""))}</span>
-          <div class="small-title">{escape(row.get("prato", ""))}</div>
-          <div class="small-muted">{escape(row.get("musica", ""))} · {escape(row.get("artista", ""))}</div>
-          <div style="margin-top:10px; line-height:1.55;"><b>Momento:</b> {escape(row.get("moment_key", ""))}</div>
-          <div style="margin-top:10px; line-height:1.55;"><b>Vinho:</b> {escape(row.get("vinho", ""))}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("### Narrativa do prato atual")
-    st.info(safe_text(row.get("texto_card_prato", "")))
-
-    upcoming = chapters[chapters["chapter_index"] >= cur_idx].copy()
-    upcoming = upcoming[["chapter_index", "moment_key", "prato", "musica", "planned_duration_sec"]].copy()
-    upcoming["duracao"] = upcoming["planned_duration_sec"].apply(fmt_mmss)
-    upcoming = upcoming.drop(columns=["planned_duration_sec"])
-
-    st.markdown("### Próximas etapas")
-    st.dataframe(upcoming, use_container_width=True, hide_index=True)
-
-
-def page_ops_view(session_id: str) -> None:
-    render_header("Operação")
-
-    chapters, cur_idx, row = get_current_chapter(session_id)
-
-    if chapters.empty or not row:
-        st.warning(f"Timeline não encontrada para a sessão: {session_id}")
-        return
-
-    render_live_controls(session_id, chapters, cur_idx)
-
-    st.markdown("### Capítulo atual")
-    st.markdown(
-        f"""
-        <div class="ops-current">
-          <span class="pill">Capítulo {escape(cur_idx)}</span>
-          <span class="pill">{escape(row.get("chapter_type", ""))}</span>
-          <span class="pill">{escape(row.get("moment_key", ""))}</span>
-          <div class="small-title">{escape(row.get("musica", ""))}</div>
-          <div class="small-muted">{escape(row.get("artista", ""))}</div>
-          <div style="margin-top:8px;"><b>Prato/serviço:</b> {escape(row.get("prato", ""))}</div>
-          <div style="margin-top:8px;"><b>Vinho:</b> {escape(row.get("vinho", ""))}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("### Narrativas do capítulo")
-    render_chapter_narratives(row)
-
-    st.markdown("### Sequência completa")
-    st.dataframe(safe_setlist_df(chapters), use_container_width=True, hide_index=True)
-
-
-def page_login() -> Optional[Dict[str, str]]:
-    render_header("Login")
+def page_login() -> None:
+    render_header("Login único")
+    st.write("Use o mesmo link para Cliente, Banda e Operação.")
 
     with st.sidebar:
         st.markdown("### Acesso interno")
-        username = st.text_input("Login")
-        password = st.text_input("Senha", type="password")
+        u = st.text_input("Login")
+        p = st.text_input("Senha", type="password")
 
         if st.button("Entrar"):
-            user = auth_login(username, password)
+            user = auth_login(u, p)
 
             if not user:
                 st.warning("Login ou senha incorretos.")
-                return None
+            else:
+                st.session_state["user"] = user
+                st.success(f"Logado como {user['role']}")
+                st.rerun()
 
-            st.session_state["user"] = user
+    qp_sid = st.query_params.get("sid", "")
+    df = list_sessions_sheet()
+
+    if qp_sid:
+        render_client_view(qp_sid)
+        time.sleep(2)
+        st.rerun()
+    elif not df.empty:
+        st.subheader("Cliente")
+        sid = st.selectbox("Escolha a sessão", df["session_id"].tolist(), key="public_sid")
+        render_client_view(sid)
+        time.sleep(2)
+        st.rerun()
+    else:
+        st.info("Sem sessões ainda. Faça login como admin para criar a primeira.")
+
+
+def page_band() -> None:
+    render_header("Banda")
+    df = list_sessions_sheet()
+
+    if df.empty:
+        st.info("Sem sessões.")
+        return
+
+    sid = st.selectbox("Sessão", df["session_id"].tolist(), key="band_sid")
+    ch = read_chapters(sid)
+
+    if ch.empty:
+        st.warning("Sem capítulos.")
+        return
+
+    st.dataframe(safe_setlist_df(ch), use_container_width=True, hide_index=True)
+
+    st.subheader("Cliente")
+    render_client_view(sid, show_controls=False)
+
+
+def page_admin() -> None:
+    render_header("Operação")
+
+    st.subheader("Criar sessão")
+
+    with st.form("create_session"):
+        sid = st.text_input("session_id", value=datetime.now().strftime("%Y%m%d-1900"))
+        title = st.text_input("Título", value="Yvora Music Session")
+        genre = st.text_input("Gênero", value="Jazz")
+        total = st.number_input("Duração total (min)", min_value=45, max_value=240, value=120, step=5)
+        ok = st.form_submit_button("Criar")
+
+    if ok:
+        upsert_session(sid, title, genre, int(total), "draft")
+
+        base = []
+
+        for i in range(10):
+            base.append(
+                {
+                    "chapter_index": i,
+                    "moment_key": "aquecimento" if i < 3 else ("intervalo" if i == 5 else "intensidade"),
+                    "chapter_type": "break" if i == 5 else "music",
+                    "planned_duration_sec": 600 if i == 5 else 300,
+                    "prato": "",
+                    "musica": "",
+                    "artista": "",
+                    "texto_card_prato": "",
+                    "texto_card_musica": "",
+                    "texto_card_harmonizacao": "",
+                    "texto_destaque": "",
+                    "music_title": "",
+                    "music_artist": "",
+                    "link_context_input": "",
+                    "ai_story_text": "",
+                    "ai_music_alternatives": "",
+                    "ai_experience_actions": "",
+                    "ai_notes": "",
+                }
+            )
+
+        save_chapters(sid, pd.DataFrame(base))
+        set_live_index(sid, 0)
+        st.success("Sessão criada e gravada no Google Sheets.")
+        st.rerun()
+
+    sess_df = list_sessions_sheet()
+
+    if sess_df.empty:
+        st.info("Sem sessões.")
+        return
+
+    sid2 = st.selectbox("Sessão", sess_df["session_id"].tolist(), key="adm_sid")
+    sess = get_session_row(sid2) or {}
+    genre = sess.get("genre", "Jazz")
+    ch = read_chapters(sid2)
+
+    if ch.empty:
+        st.warning("Sem capítulos.")
+        return
+
+    st.subheader("Resumo")
+    st.dataframe(safe_setlist_df(ch), use_container_width=True, hide_index=True)
+
+    st.subheader("Editar capítulos")
+
+    edit_cols = [
+        c
+        for c in [
+            "chapter_index",
+            "moment_key",
+            "chapter_type",
+            "planned_duration_sec",
+            "prato",
+            "musica",
+            "artista",
+            "texto_card_prato",
+            "texto_card_musica",
+            "texto_card_harmonizacao",
+            "texto_destaque",
+            "link_context_input",
+        ]
+        if c in ch.columns
+    ]
+
+    edited = st.data_editor(ch[edit_cols], use_container_width=True, hide_index=True, num_rows="dynamic")
+
+    c1, c2, c3 = st.columns([1, 1, 1])
+
+    with c1:
+        if st.button("Salvar alterações"):
+            full = ch.copy()
+
+            for col in edit_cols:
+                full[col] = edited[col]
+
+            save_chapters(sid2, full)
+            st.success("Capítulos salvos.")
             st.rerun()
 
-    return st.session_state.get("user")
+    with c2:
+        if st.button("Gemini: gerar histórico"):
+            full = ch.copy().reset_index(drop=True)
+            n = 0
+
+            for i in range(len(full)):
+                if safe_text(full.loc[i, "chapter_type"]).lower() != "music":
+                    continue
+
+                payload = {
+                    "genre": genre,
+                    "moment_key": safe_text(full.loc[i, "moment_key"]),
+                    "music_title": pick_first(full.loc[i].to_dict(), ["musica", "music_title"]),
+                    "music_artist": pick_first(full.loc[i].to_dict(), ["artista", "music_artist"]),
+                    "prato": safe_text(full.loc[i].get("prato", "")),
+                    "link_context_input": safe_text(full.loc[i].get("link_context_input", "")),
+                }
+
+                out = gemini_generate(payload)
+
+                full.loc[i, "ai_story_text"] = out["story_text"]
+                full.loc[i, "ai_music_alternatives"] = out["music_alternatives"]
+                full.loc[i, "ai_experience_actions"] = out["experience_actions"]
+                full.loc[i, "ai_notes"] = out["notes"]
+
+                append_gemini_history(
+                    {
+                        "session_id": sid2,
+                        "chapter_index": int(full.loc[i, "chapter_index"]),
+                        "moment_key": payload["moment_key"],
+                        "music_title": payload["music_title"],
+                        "music_artist": payload["music_artist"],
+                        "link_context_input": payload["link_context_input"],
+                        "ai_story_text": out["story_text"],
+                        "ai_music_alternatives": out["music_alternatives"],
+                        "ai_experience_actions": out["experience_actions"],
+                        "ai_notes": out["notes"],
+                    }
+                )
+
+                n += 1
+
+            save_chapters(sid2, full)
+            st.success(f"IA gerou {n} capítulos e registrou histórico.")
+            st.rerun()
+
+    with c3:
+        if st.button("Abrir modo cliente"):
+            st.query_params["sid"] = sid2
+            st.rerun()
+
+    st.subheader("Controle ao vivo")
+    render_client_view(sid2, show_controls=True)
 
 
-def role_can_access(role: str, view: str) -> bool:
-    role = safe_text(role).lower()
-    view = safe_text(view).lower()
-
-    if role == "admin":
-        return True
-
-    allowed = {
-        "ops": ["operacao", "cliente", "banda", "cozinha"],
-        "operation": ["operacao", "cliente", "banda", "cozinha"],
-        "band": ["banda", "cliente"],
-        "kitchen": ["cozinha"],
-        "client": ["cliente"],
-        "staff": ["cliente", "banda", "cozinha"],
-    }
-
-    return view in allowed.get(role, [])
-
-
-def main() -> None:
+def main():
     app_bootstrap()
 
     try:
         _ = get_sheet()
     except Exception as e:
         st.error(f"Erro de configuração: {e}")
-        st.info("Verifique o sheet_id e as credenciais nos Secrets do Streamlit.")
+        st.info("O app aceita [google].service_account_json ou [gcp_service_account] nos Secrets.")
         return
 
     user = st.session_state.get("user")
-    view = safe_text(st.query_params.get("view", "")).lower()
-    sid = get_default_sid()
-
-    path = safe_text(st.query_params.get("path", "")).lower()
-
-    if not view:
-        # compatibilidade com alguns links antigos do Streamlit
-        raw_path = safe_text(st.experimental_get_query_params().get("view", [""])[0]) if hasattr(st, "experimental_get_query_params") else ""
-        view = raw_path.lower()
-
-    # compatibilidade com URLs antigas como /Banda, /Operacao
-    current_path = safe_text(st.context.url).lower() if hasattr(st, "context") else ""
-    if not view:
-        if "/banda" in current_path:
-            view = "banda"
-        elif "/cozinha" in current_path:
-            view = "cozinha"
-        elif "/operacao" in current_path or "/operação" in current_path:
-            view = "operacao"
-        elif "/cliente" in current_path:
-            view = "cliente"
-
-    if not view:
-        view = "cliente"
+    qp_sid = st.query_params.get("sid", "")
 
     with st.sidebar:
-        st.markdown("### Visões YVORA")
-        selected_view = st.radio(
-            "Escolha a visão",
-            ["cliente", "banda", "cozinha", "operacao"],
-            index=["cliente", "banda", "cozinha", "operacao"].index(view) if view in ["cliente", "banda", "cozinha", "operacao"] else 0,
-        )
-
-        if selected_view != view:
-            st.query_params["view"] = selected_view
-            st.query_params["sid"] = sid
-            st.rerun()
-
-        sessions = list_sessions_sheet()
-
-        if not sessions.empty:
-            session_options = sessions["session_id"].tolist()
-            chosen_sid = st.selectbox(
-                "Sessão",
-                session_options,
-                index=session_options.index(sid) if sid in session_options else 0,
-            )
-
-            if chosen_sid != sid:
-                st.query_params["sid"] = chosen_sid
-                st.query_params["view"] = view
-                st.rerun()
+        st.markdown("### Navegação")
 
         if user:
             st.markdown(
-                f"<span class='yv-badge'>{escape(user.get('username'))}</span>"
-                f"<span class='yv-badge'>{escape(user.get('role'))}</span>",
+                f"<span class='yv-badge'>{html.escape(user.get('username'))}</span><span class='yv-badge'>{html.escape(user.get('role'))}</span>",
                 unsafe_allow_html=True,
             )
 
             if st.button("Sair"):
                 logout()
 
-    # Cliente e banda ficam simples para teste e uso em tela.
-    if view == "cliente":
+    if not user:
+        page_login()
+        return
+
+    role = user.get("role", "")
+
+    if role == "admin":
+        page = st.sidebar.radio("Área", ["Operação", "Banda", "Cliente"], index=0)
+
+        if page == "Operação":
+            page_admin()
+        elif page == "Banda":
+            page_band()
+        else:
+            render_header("Cliente")
+            df = list_sessions_sheet()
+
+            if df.empty:
+                st.info("Sem sessões.")
+            else:
+                sid = qp_sid or st.selectbox("Sessão", df["session_id"].tolist(), key="admin_public_sid")
+                render_client_view(sid, show_controls=True)
+
+    elif role == "band":
+        page_band()
+
+    else:
         render_header("Cliente")
-        render_client_view(sid, show_controls=False)
-        time.sleep(2)
-        st.rerun()
-        return
+        sid = qp_sid
 
-    if view == "banda":
-        page_band_view(sid)
-        time.sleep(2)
-        st.rerun()
-        return
+        if not sid:
+            df = list_sessions_sheet()
 
-    # Cozinha e operação exigem login.
-    if view in ["cozinha", "operacao"]:
-        if not user:
-            user = page_login()
-            if not user:
+            if df.empty:
+                st.info("Sem sessões.")
                 return
 
-        role = safe_text(user.get("role", "")).lower()
+            sid = st.selectbox("Sessão", df["session_id"].tolist(), key="staff_public_sid")
 
-        if not role_can_access(role, view):
-            st.error("Usuário sem permissão para esta área.")
-            return
-
-        if view == "cozinha":
-            page_kitchen_view(sid)
-        else:
-            page_ops_view(sid)
-
-        time.sleep(2)
-        st.rerun()
-        return
+        render_client_view(sid)
 
 
 if __name__ == "__main__":
