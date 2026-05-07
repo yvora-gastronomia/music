@@ -2,7 +2,7 @@ import os
 import json
 import html
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -49,7 +49,7 @@ CH_HEADERS = [
     "texto_vinho",
 ]
 
-LIVE_HEADERS = [
+LIVE_BASE_HEADERS = [
     "session_id",
     "current_chapter_index",
     "updated_at_utc",
@@ -261,6 +261,16 @@ def app_bootstrap() -> None:
             line-height: 1.55;
         }}
 
+        .ok-box {{
+            background: rgba(14,42,71,0.08);
+            border: 1px solid rgba(14,42,71,0.16);
+            border-radius: 14px;
+            padding: 12px 16px;
+            color: {BRAND_BLUE};
+            font-weight: 700;
+            margin: 8px 0 16px 0;
+        }}
+
         .stButton > button {{
             border-radius: 999px !important;
             background: {BRAND_BLUE} !important;
@@ -359,18 +369,6 @@ def ws_read_df(title: str, headers: Optional[List[str]] = None) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=current_headers)
 
 
-def ws_replace_all(title: str, headers: List[str], df: pd.DataFrame) -> None:
-    ws = ws_get_or_create(title, headers)
-
-    output = [headers]
-
-    for _, row in df.iterrows():
-        output.append([safe_text(row.get(h, "")) for h in headers])
-
-    ws.clear()
-    ws.update("A1", output)
-
-
 def normalize_sessions(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=SESS_HEADERS)
@@ -446,71 +444,87 @@ def read_chapters(session_id: str) -> pd.DataFrame:
     return df.sort_values("chapter_index").reset_index(drop=True)
 
 
-def normalize_live(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame(columns=LIVE_HEADERS)
+def live_ws():
+    return ws_get_or_create("live", LIVE_BASE_HEADERS)
 
-    if "session_id" not in df.columns:
-        if "sid" in df.columns:
-            df["session_id"] = df["sid"]
-        elif "session" in df.columns:
-            df["session_id"] = df["session"]
 
-    if "current_chapter_index" not in df.columns:
-        if "ordem_atual" in df.columns:
-            df["current_chapter_index"] = df["ordem_atual"]
-        elif "current_order" in df.columns:
-            df["current_chapter_index"] = df["current_order"]
-        else:
-            df["current_chapter_index"] = "1"
+def ensure_live_schema() -> Tuple[Any, List[str], Dict[str, int]]:
+    ws = live_ws()
+    values = ws.get_all_values()
 
-    if "updated_at_utc" not in df.columns:
-        df["updated_at_utc"] = ""
+    if not values:
+        ws.append_row(LIVE_BASE_HEADERS)
+        values = [LIVE_BASE_HEADERS]
 
-    for col in LIVE_HEADERS:
-        if col not in df.columns:
-            df[col] = ""
+    headers = values[0]
 
-    return df[LIVE_HEADERS].copy()
+    required = ["session_id", "current_chapter_index", "updated_at_utc"]
+
+    changed = False
+    for h in required:
+        if h not in headers:
+            headers.append(h)
+            changed = True
+
+    if changed:
+        ws.update("A1", [headers])
+
+    col = {h: headers.index(h) + 1 for h in headers}
+    return ws, headers, col
 
 
 def get_live_index(session_id: str) -> int:
-    df = ws_read_df("live", LIVE_HEADERS)
-    df = normalize_live(df)
+    ws, headers, col = ensure_live_schema()
+    values = ws.get_all_values()
 
-    if df.empty:
+    if len(values) < 2:
         return 1
 
-    match = df[df["session_id"].astype(str) == session_id]
+    sid_col = col["session_id"] - 1
+    idx_col = col["current_chapter_index"] - 1
 
-    if match.empty:
-        return 1
+    for row in values[1:]:
+        row = row + [""] * (len(headers) - len(row))
 
-    try:
-        idx = int(float(match.iloc[0]["current_chapter_index"]))
-        return max(idx, 1)
-    except Exception:
-        return 1
+        if safe_text(row[sid_col]) == session_id:
+            try:
+                return max(int(float(row[idx_col])), 1)
+            except Exception:
+                return 1
+
+    return 1
 
 
 def set_live_index(session_id: str, idx: int) -> None:
-    df = ws_read_df("live", LIVE_HEADERS)
-    df = normalize_live(df)
+    ws, headers, col = ensure_live_schema()
+    values = ws.get_all_values()
 
-    if df.empty:
-        df = pd.DataFrame(columns=LIVE_HEADERS)
-
-    df["session_id"] = df["session_id"].astype(str)
     idx = int(idx)
     now = utc_now()
 
-    if session_id in df["session_id"].tolist():
-        df.loc[df["session_id"] == session_id, "current_chapter_index"] = str(idx)
-        df.loc[df["session_id"] == session_id, "updated_at_utc"] = now
-    else:
-        df.loc[len(df)] = [session_id, str(idx), now]
+    sid_col = col["session_id"]
+    current_col = col["current_chapter_index"]
+    updated_col = col["updated_at_utc"]
 
-    ws_replace_all("live", LIVE_HEADERS, df[LIVE_HEADERS])
+    target_row = None
+
+    for row_number, row in enumerate(values[1:], start=2):
+        row = row + [""] * (len(headers) - len(row))
+        if safe_text(row[sid_col - 1]) == session_id:
+            target_row = row_number
+            break
+
+    if target_row is None:
+        new_row = [""] * len(headers)
+        new_row[sid_col - 1] = session_id
+        new_row[current_col - 1] = str(idx)
+        new_row[updated_col - 1] = now
+        ws.append_row(new_row)
+    else:
+        ws.update_cell(target_row, current_col, str(idx))
+        ws.update_cell(target_row, updated_col, now)
+
+    st.session_state[f"live_idx_{session_id}"] = idx
 
 
 def auth_login(username: str, password: str) -> Optional[Dict[str, str]]:
@@ -553,7 +567,7 @@ def get_default_sid() -> str:
     return "bossa-nova-yvora"
 
 
-def get_current_row(session_id: str) -> tuple[pd.DataFrame, int, Dict[str, Any]]:
+def get_current_row(session_id: str) -> Tuple[pd.DataFrame, int, Dict[str, Any]]:
     chapters = read_chapters(session_id)
 
     if chapters.empty:
@@ -697,17 +711,26 @@ def render_operation(session_id: str) -> None:
         unsafe_allow_html=True,
     )
 
+    st.markdown(
+        f"""
+        <div class="ok-box">
+            Etapa gravada na aba live: {idx}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 1.2])
 
     with c1:
-        if st.button("Voltar", use_container_width=True):
+        if st.button("Voltar", use_container_width=True, key=f"back_{session_id}_{idx}"):
             prev_indexes = [i for i in indexes if i < idx]
             new_idx = max(prev_indexes) if prev_indexes else min_idx
             set_live_index(session_id, new_idx)
             st.rerun()
 
     with c2:
-        if st.button("Avançar", use_container_width=True):
+        if st.button("Avançar", use_container_width=True, key=f"next_{session_id}_{idx}"):
             next_indexes = [i for i in indexes if i > idx]
             new_idx = min(next_indexes) if next_indexes else max_idx
             set_live_index(session_id, new_idx)
@@ -718,12 +741,15 @@ def render_operation(session_id: str) -> None:
             "Ir para",
             indexes,
             index=indexes.index(idx) if idx in indexes else 0,
-            key=f"jump_{session_id}_{idx}",
+            key=f"jump_{session_id}",
         )
 
-    with c4:
-        if st.button("Ativar etapa", use_container_width=True):
+        if int(selected) != int(idx):
             set_live_index(session_id, int(selected))
+            st.rerun()
+
+    with c4:
+        if st.button("Recarregar", use_container_width=True, key=f"refresh_{session_id}_{idx}"):
             st.rerun()
 
     st.markdown(
@@ -774,8 +800,6 @@ def render_band(session_id: str) -> None:
     if chapters.empty or not row:
         st.warning("Sessão sem capítulos.")
         return
-
-    st.markdown("### Agora")
 
     musica = pick_first(row, ["musica", "music_title"], "")
     artista = pick_first(row, ["artista", "music_artist"], "")
